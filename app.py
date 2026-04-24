@@ -1,34 +1,57 @@
-import streamlit as st
-import joblib
+import os
 import json
+import joblib
+import gdown
 import torch
 import numpy as np
 import pandas as pd
+import streamlit as st
+
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import os
-import gdown
+
+
+# ===============================
+# App Configuration
+# ===============================
+st.set_page_config(
+    page_title="AI Toxicity Screening System",
+    page_icon="🧪",
+    layout="wide"
+)
 
 DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/1LVaMkGMzFRb1_GiDlGTeHS3dX6Ulyi0v?usp=drive_link"
-path = "toxicity_system"
+MODEL_DIR = "toxicity_system"
 
-if not os.path.exists(path):
-    os.makedirs(path, exist_ok=True)
-    gdown.download_folder(
-        DRIVE_FOLDER_URL,
-        output=path,
-        quiet=False,
-        use_cookies=False
-    )
 
-path = "toxicity_system"
+# ===============================
+# Download Model Files
+# ===============================
+@st.cache_resource
+def download_files():
+    if not os.path.exists(MODEL_DIR) or len(os.listdir(MODEL_DIR)) == 0:
+        os.makedirs(MODEL_DIR, exist_ok=True)
+        gdown.download_folder(
+            DRIVE_FOLDER_URL,
+            output=MODEL_DIR,
+            quiet=False,
+            use_cookies=False
+        )
 
+
+# ===============================
+# Load System
+# ===============================
 @st.cache_resource
 def load_system():
-    tokenizer = AutoTokenizer.from_pretrained(f"{path}/chemberta_model")
-    bert_model = AutoModelForSequenceClassification.from_pretrained(f"{path}/chemberta_model")
-    vectorizer = joblib.load(f"{path}/tfidf_vectorizer.pkl")
+    download_files()
 
-    with open(f"{path}/config.json") as f:
+    tokenizer = AutoTokenizer.from_pretrained(f"{MODEL_DIR}/chemberta_model")
+    bert_model = AutoModelForSequenceClassification.from_pretrained(f"{MODEL_DIR}/chemberta_model")
+    bert_model.eval()
+
+    vectorizer = joblib.load(f"{MODEL_DIR}/tfidf_vectorizer.pkl")
+
+    with open(f"{MODEL_DIR}/config.json", "r") as f:
         config = json.load(f)
 
     tox_cols = config["toxicity_tasks"]
@@ -37,14 +60,25 @@ def load_system():
 
     rf_models = []
     for task in tox_cols:
-        rf_models.append(joblib.load(f"{path}/rf_{task}.pkl"))
+        rf_models.append(joblib.load(f"{MODEL_DIR}/rf_{task}.pkl"))
 
-    return tokenizer, bert_model, vectorizer, config, tox_cols, bert_w, rf_w, rf_models
+    return tokenizer, bert_model, vectorizer, tox_cols, bert_w, rf_w, rf_models
 
-tokenizer, bert_model, vectorizer, config, tox_cols, bert_w, rf_w, rf_models = load_system()
 
+tokenizer, bert_model, vectorizer, tox_cols, bert_w, rf_w, rf_models = load_system()
+
+
+# ===============================
+# Prediction Function
+# ===============================
 def predict_smiles(smiles):
-    inputs = tokenizer(smiles, return_tensors="pt", truncation=True, padding=True, max_length=256)
+    inputs = tokenizer(
+        smiles,
+        return_tensors="pt",
+        truncation=True,
+        padding=True,
+        max_length=256
+    )
 
     with torch.no_grad():
         outputs = bert_model(**inputs)
@@ -75,23 +109,53 @@ def predict_smiles(smiles):
 
     return final_probs, level, max_risk, avg_risk
 
+
+# ===============================
+# User Interface
+# ===============================
 st.title("🧪 AI Toxicity Screening System")
+st.markdown(
+    "### Multi-endpoint Tox21 toxicity prediction using ChemBERTa + TF-IDF Random Forest Ensemble"
+)
 
-smiles = st.text_input("Enter SMILES:")
+st.info(
+    "Enter a SMILES molecular string to predict toxicity probabilities across 12 Tox21 endpoints."
+)
 
-if st.button("Predict"):
-    probs, level, max_risk, avg_risk = predict_smiles(smiles)
+smiles = st.text_input(
+    "Enter SMILES:",
+    value="CCOc1ccc2nc(S(N)(=O)=O)sc2c1"
+)
 
-    st.write("### Result")
-    st.write("Risk:", level)
-    st.write("Max:", max_risk)
-    st.write("Avg:", avg_risk)
+if st.button("Predict Toxicity"):
+    if smiles.strip() == "":
+        st.error("Please enter a valid SMILES string.")
+    else:
+        probs, level, max_risk, avg_risk = predict_smiles(smiles.strip())
 
-    df = pd.DataFrame({
-        "Endpoint": tox_cols,
-        "Probability": probs
-    }).sort_values("Probability", ascending=False)
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Overall Risk", level)
+        col2.metric("Max Endpoint Toxicity", round(max_risk, 3))
+        col3.metric("Average Toxicity", round(avg_risk, 3))
 
-    st.dataframe(df)
+        results_df = pd.DataFrame({
+            "Endpoint": tox_cols,
+            "Predicted Probability": probs
+        }).sort_values("Predicted Probability", ascending=False)
 
-    st.warning("⚠️ This is Tox21 prediction only.")
+        st.subheader("Top Risk Endpoints")
+        st.dataframe(results_df.head(3), use_container_width=True)
+
+        st.subheader("All Tox21 Endpoints")
+        st.dataframe(results_df, use_container_width=True)
+
+        st.warning(
+            "⚠️ This tool predicts Tox21 endpoint-related toxicity only. "
+            "It is not a substitute for laboratory, clinical, or regulatory toxicology assessment."
+        )
+
+st.sidebar.header("Model Information")
+st.sidebar.write("Model: ChemBERTa + TF-IDF Random Forest Ensemble")
+st.sidebar.write("Tasks: 12 Tox21 endpoints")
+st.sidebar.write(f"ChemBERTa weight: {bert_w}")
+st.sidebar.write(f"Random Forest weight: {rf_w}")
