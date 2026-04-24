@@ -5,6 +5,20 @@ import torch
 import numpy as np
 import pandas as pd
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import os
+import gdown
+
+DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/1LVaMkGMzFRb1_GiDlGTeHS3dX6Ulyi0v?usp=drive_link"
+path = "toxicity_system"
+
+if not os.path.exists(path):
+    os.makedirs(path, exist_ok=True)
+    gdown.download_folder(
+        DRIVE_FOLDER_URL,
+        output=path,
+        quiet=False,
+        use_cookies=False
+    )
 
 path = "toxicity_system"
 
