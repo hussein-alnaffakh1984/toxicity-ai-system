@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from scipy.stats import entropy
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 
@@ -69,6 +70,27 @@ tokenizer, bert_model, vectorizer, tox_cols, bert_w, rf_w, rf_models = load_syst
 
 
 # ===============================
+# Adaptive Risk Function
+# ===============================
+def compute_adaptive_risk(probs):
+    max_risk = np.max(probs)
+    mean_risk = np.mean(probs)
+    var_risk = np.var(probs)
+
+    eps = 1e-9
+    ent = entropy(probs + eps)
+
+    adaptive_score = (
+        0.4 * max_risk +
+        0.3 * mean_risk +
+        0.2 * var_risk +
+        0.1 * ent
+    )
+
+    return float(adaptive_score)
+
+
+# ===============================
 # Prediction Function
 # ===============================
 def predict_smiles(smiles):
@@ -97,17 +119,18 @@ def predict_smiles(smiles):
 
     max_risk = float(np.max(final_probs))
     avg_risk = float(np.mean(final_probs))
+    adaptive_risk = compute_adaptive_risk(final_probs)
 
-    if max_risk >= 0.70:
+    if adaptive_risk >= 0.60:
         level = "HIGH RISK 🔴"
-    elif max_risk >= 0.40:
+    elif adaptive_risk >= 0.40:
         level = "MEDIUM RISK 🟡"
-    elif max_risk >= 0.20:
+    elif adaptive_risk >= 0.25:
         level = "LOW-MODERATE RISK 🟠"
     else:
         level = "LOW RISK 🟢"
 
-    return final_probs, level, max_risk, avg_risk
+    return final_probs, level, max_risk, avg_risk, adaptive_risk
 
 
 # ===============================
@@ -119,7 +142,8 @@ st.markdown(
 )
 
 st.info(
-    "Enter a SMILES molecular string to predict toxicity probabilities across 12 Tox21 endpoints."
+    "Enter a SMILES molecular string to predict toxicity probabilities across 12 Tox21 endpoints. "
+    "The final decision uses an adaptive risk score based on maximum toxicity, average toxicity, variance, and entropy."
 )
 
 smiles = st.text_input(
@@ -131,12 +155,13 @@ if st.button("Predict Toxicity"):
     if smiles.strip() == "":
         st.error("Please enter a valid SMILES string.")
     else:
-        probs, level, max_risk, avg_risk = predict_smiles(smiles.strip())
+        probs, level, max_risk, avg_risk, adaptive_risk = predict_smiles(smiles.strip())
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("Overall Risk", level)
-        col2.metric("Max Endpoint Toxicity", round(max_risk, 3))
-        col3.metric("Average Toxicity", round(avg_risk, 3))
+        col2.metric("Adaptive Risk", round(adaptive_risk, 3))
+        col3.metric("Max Endpoint Toxicity", round(max_risk, 3))
+        col4.metric("Average Toxicity", round(avg_risk, 3))
 
         results_df = pd.DataFrame({
             "Endpoint": tox_cols,
@@ -159,3 +184,6 @@ st.sidebar.write("Model: ChemBERTa + TF-IDF Random Forest Ensemble")
 st.sidebar.write("Tasks: 12 Tox21 endpoints")
 st.sidebar.write(f"ChemBERTa weight: {bert_w}")
 st.sidebar.write(f"Random Forest weight: {rf_w}")
+
+st.sidebar.header("Decision Strategy")
+st.sidebar.write("Adaptive Risk = 0.4×Max + 0.3×Mean + 0.2×Variance + 0.1×Entropy")
